@@ -29,6 +29,36 @@ def resolve_track(name: str):
     return getattr(Track, _TRACK_NAMES[name])
 
 
+def _patch_watsonx_for_reasoning_models(client_cls):
+    """Patch WatsonX client to inject schema via system prompt instead of response_format.
+
+    gpt-oss-120b is a reasoning model that returns output in reasoning_content, not
+    content. ALTK's _parse_llm_response only reads content, so response_format mode
+    always raises 'No content or tool calls found in response'. Injecting the schema
+    into the system prompt (same as ALTK's Ollama provider) makes the model return
+    valid JSON in content. See: https://github.com/kagenti/kagenti-extensions/issues/676
+    """
+    import functools
+
+    original_generate = client_cls.generate
+    original_generate_async = client_cls.generate_async
+
+    @functools.wraps(original_generate)
+    def patched_generate(self, *args, **kwargs):
+        kwargs.setdefault("schema_field", None)
+        kwargs.setdefault("include_schema_in_system_prompt", True)
+        return original_generate(self, *args, **kwargs)
+
+    @functools.wraps(original_generate_async)
+    async def patched_generate_async(self, *args, **kwargs):
+        kwargs.setdefault("schema_field", None)
+        kwargs.setdefault("include_schema_in_system_prompt", True)
+        return await original_generate_async(self, *args, **kwargs)
+
+    client_cls.generate = patched_generate
+    client_cls.generate_async = patched_generate_async
+
+
 def build_llm_client(settings: Settings):
     """Construct a validating ALTK LLM client for the configured provider.
 
@@ -51,13 +81,15 @@ def build_llm_client(settings: Settings):
     native = not settings.llm_registry_id
 
     if native and settings.provider == "watsonx":
-        return client_cls(
+        client = client_cls(
             model_name=settings.model,
             api_key=settings.wx_api_key,
             project_id=settings.wx_project_id,
             api_base=settings.wx_url,
             timeout=settings.llm_timeout_seconds,
         )
+        _patch_watsonx_for_reasoning_models(client_cls)
+        return client
 
     if native and settings.provider == "ollama":
         # Point every LiteLLM Ollama call at the configured server. We pass
