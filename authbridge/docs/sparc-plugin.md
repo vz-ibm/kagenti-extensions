@@ -100,6 +100,7 @@ pipeline:
           timeout_ms: 30000
           skip_tools: ["list_*"]         # tool-name globs NOT reflected on (e.g. read-only tools)
           reflect_tools: []              # if non-empty, ONLY these globs are reflected
+          strip_tool_args: ["session_id"] # argument keys stripped before reflecting (see below)
 ```
 
 | Field | Required | Default | Description |
@@ -115,6 +116,18 @@ pipeline:
 | `skip_tools` | No | — | Tool-name globs (`path.Match`) to NOT reflect on (e.g. trivial read tools). |
 | `reflect_tools` | No | — | If non-empty, ONLY reflect tools matching these globs; all others skipped. |
 | `bypass_hosts` / `bypass_paths` | No | built-in | Host / path globs skipped without reflecting. |
+| `strip_tool_args` | No | `[]` | Argument key names to remove from every tool call *before* reflecting. Applies to both `mcp` and `inference` enforcement modes. Use to drop fields an agent injects that are not declared in the tool's schema (e.g. `session_id`), which would otherwise trigger a static-layer reject. The forwarded tool call is unaffected — only the SPARC reflection payload is stripped. |
+
+### Stripping injected arguments before reflection
+
+Some agents add internal tracking fields (e.g. `session_id`) to every tool call even when the tool's spec doesn't declare them. SPARC's static layer rejects any undeclared field, producing false-positive blocks. `strip_tool_args` removes named keys from the tool call arguments before they reach SPARC — acting as a shim at the enforcement boundary without altering the actual tool call forwarded downstream.
+
+```yaml
+strip_tool_args:
+  - session_id
+```
+
+This is a workaround for an upstream agent bug. Remove the entry once the agent is fixed.
 
 ### Pipeline composition
 

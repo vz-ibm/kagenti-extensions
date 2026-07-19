@@ -62,8 +62,29 @@ func inferenceMessagesAndTools(inf *pipeline.InferenceExtension) (messages, tool
 
 // buildToolCall renders the MCP tools/call as an OpenAI-style tool call (the
 // shape SPARC expects). Arguments are serialized to a JSON string.
-func buildToolCall(mcp *pipeline.MCPExtension, toolName string) map[string]any {
-	return openAIToolCall(fmt.Sprintf("%v", mcpRPCID(mcp)), toolName, extractMCPToolArgs(mcp))
+func buildToolCall(mcp *pipeline.MCPExtension, toolName string, strip []string) map[string]any {
+	return openAIToolCall(fmt.Sprintf("%v", mcpRPCID(mcp)), toolName, stripToolArgs(extractMCPToolArgs(mcp), strip))
+}
+
+// stripToolArgs removes the named keys from a JSON-encoded arguments object.
+// Returns the original string unchanged if strip is empty, the JSON is not an
+// object, or unmarshaling fails.
+func stripToolArgs(args string, strip []string) string {
+	if len(strip) == 0 || args == "" {
+		return args
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(args), &m); err != nil {
+		return args
+	}
+	for _, k := range strip {
+		delete(m, k)
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return args
+	}
+	return string(b)
 }
 
 // openAIToolCall builds the canonical OpenAI function tool-call object. args is

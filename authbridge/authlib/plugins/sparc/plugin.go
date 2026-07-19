@@ -102,6 +102,8 @@ type sparcConfig struct {
 	BypassHosts []string `json:"bypass_hosts" description:"Host globs (path.Match) skipped without reflecting. Defaults include keycloak / spire / otel."`
 
 	BypassPaths []string `json:"bypass_paths" description:"URL path globs skipped without reflecting. Defaults: /.well-known/* /healthz /readyz /livez."`
+
+	StripToolArgs []string `json:"strip_tool_args" description:"Argument keys to remove from every tool call before reflecting. Use to drop fields that agents inject but tools don't declare (e.g. [\"session_id\"])."`
 }
 
 // defaultBypassHosts mirrors ibac's conservative starting set (kept local so a
@@ -295,7 +297,7 @@ func (p *SPARC) OnRequest(ctx context.Context, pctx *pipeline.Context) pipeline.
 	in := ReflectInput{
 		Messages:  messages,
 		ToolSpecs: toolSpecs,
-		ToolCalls: []map[string]any{buildToolCall(pctx.Extensions.MCP, toolName)},
+		ToolCalls: []map[string]any{buildToolCall(pctx.Extensions.MCP, toolName, p.cfg.StripToolArgs)},
 		SessionID: sessionID(pctx),
 		Track:     p.cfg.Track,
 	}
@@ -343,7 +345,7 @@ func (p *SPARC) OnResponse(ctx context.Context, pctx *pipeline.Context) pipeline
 	in := ReflectInput{
 		Messages:  messages,
 		ToolSpecs: toolSpecs,
-		ToolCalls: []map[string]any{openAIToolCall(tc.ID, tc.Name, tc.Arguments)},
+		ToolCalls: []map[string]any{openAIToolCall(tc.ID, tc.Name, stripToolArgs(tc.Arguments, p.cfg.StripToolArgs))},
 		SessionID: sessionID(pctx),
 		Track:     p.cfg.Track,
 	}

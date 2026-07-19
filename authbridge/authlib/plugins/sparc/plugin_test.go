@@ -335,6 +335,53 @@ func TestInference_MCPModeOnResponseIsNoop(t *testing.T) {
 	}
 }
 
+func TestMCP_StripToolArgs(t *testing.T) {
+	fr := &fakeReflector{verdict: ReflectVerdict{Decision: DecisionApprove}}
+	p := configured(t, `{"reflector_endpoint":"http://x","strip_tool_args":["session_id"]}`, fr)
+	pctx := mcpPctx()
+	pctx.Extensions.MCP.Params["arguments"] = map[string]any{
+		"transaction_id": "TX9999",
+		"session_id":     "sess-abc",
+	}
+	invokeReq(p, pctx)
+	if fr.calls != 1 {
+		t.Fatalf("expected one reflect call, got %d", fr.calls)
+	}
+	var args map[string]any
+	tc := fr.gotIn.ToolCalls[0]["function"].(map[string]any)
+	if err := json.Unmarshal([]byte(tc["arguments"].(string)), &args); err != nil {
+		t.Fatalf("unmarshal args: %v", err)
+	}
+	if _, present := args["session_id"]; present {
+		t.Error("session_id should have been stripped before reflecting")
+	}
+	if args["transaction_id"] != "TX9999" {
+		t.Errorf("other args should be preserved, got %v", args)
+	}
+}
+
+func TestInference_StripToolArgs(t *testing.T) {
+	fr := &fakeReflector{verdict: ReflectVerdict{Decision: DecisionApprove}}
+	p := configured(t, `{"reflector_endpoint":"http://x","enforcement":"inference","strip_tool_args":["session_id"]}`, fr)
+	pctx := inferencePctx()
+	pctx.Extensions.Inference.ToolCalls[0].Arguments = `{"transaction_id":"TX9999","session_id":"sess-abc"}`
+	invokeResp(p, pctx)
+	if fr.calls != 1 {
+		t.Fatalf("expected one reflect call, got %d", fr.calls)
+	}
+	var args map[string]any
+	tc := fr.gotIn.ToolCalls[0]["function"].(map[string]any)
+	if err := json.Unmarshal([]byte(tc["arguments"].(string)), &args); err != nil {
+		t.Fatalf("unmarshal args: %v", err)
+	}
+	if _, present := args["session_id"]; present {
+		t.Error("session_id should have been stripped before reflecting")
+	}
+	if args["transaction_id"] != "TX9999" {
+		t.Errorf("other args should be preserved, got %v", args)
+	}
+}
+
 func TestCapabilities(t *testing.T) {
 	caps := NewSPARC().Capabilities()
 	if !caps.WritesBody || !caps.ReadsBody {
