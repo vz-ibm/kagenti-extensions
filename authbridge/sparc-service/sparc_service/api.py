@@ -32,7 +32,9 @@ log = logging.getLogger(__name__)
 _LOG_REQUESTS: bool = os.getenv("SPARC_LOG_REQUESTS", "").strip().lower() in {"1", "true", "yes"}
 
 # SPARC_STRIP_TOOL_ARG_KEYS — comma-separated keys to remove from every
-# tool_calls[].function.arguments before SPARC evaluates the call.
+# tool_calls[].function.arguments before SPARC evaluates the call. Use to drop
+# agent-injected keys that are not in the tool spec and would otherwise cause
+# SPARC to reject the call.
 # Example: SPARC_STRIP_TOOL_ARG_KEYS=session_id,request_id
 _STRIP_KEYS: frozenset[str] = frozenset(
     k.strip() for k in os.getenv("SPARC_STRIP_TOOL_ARG_KEYS", "").split(",") if k.strip()
@@ -45,7 +47,6 @@ _STRIP_KEYS: frozenset[str] = frozenset(
 _SKIP_TOOLS: frozenset[str] = frozenset(
     t.strip() for t in os.getenv("SPARC_SKIP_TOOLS", "").split(",") if t.strip()
 )
-
 
 def _strip_tool_arg_keys(tool_calls: list[dict], keys: frozenset[str]) -> list[dict]:
     """Return a copy of tool_calls with the named argument keys removed."""
