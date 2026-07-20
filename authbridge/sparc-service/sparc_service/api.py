@@ -107,8 +107,10 @@ def create_app(engine: ReflectionEngine | None = None) -> FastAPI:
         if _SKIP_TOOLS and request.tool_calls:
             tool_name = request.tool_calls[0].get("function", {}).get("name", "")
             if tool_name in _SKIP_TOOLS:
-                log.info("reflect tool=%s decision=approve score=- ms=0.0 (skipped — in SPARC_SKIP_TOOLS)", tool_name)
-                return ReflectResponse(decision="approve", issues=[], overall_avg_score=None, execution_time_ms=0.0)
+                from datetime import datetime, timezone
+                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                log.info("reflect ts=%s tool=%s args={} decision=approve score=- ms=- (skipped — SPARC_SKIP_TOOLS)", ts, tool_name)
+                return ReflectResponse(decision="approve", issues=[], overall_avg_score=None, execution_time_ms=None)
 
         # SPARCReflectionComponent.process is synchronous (and CPU/IO bound on the
         # LLM call); run it off the event loop so the service stays responsive.
