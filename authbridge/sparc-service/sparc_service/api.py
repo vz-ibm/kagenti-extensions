@@ -35,6 +35,16 @@ _STRIP_KEYS: frozenset[str] = frozenset(
     k.strip() for k in os.getenv("SPARC_STRIP_TOOL_ARG_KEYS", "").split(",") if k.strip()
 )
 
+# When SPARC_SKIP_TOOLS is set (comma-separated tool names), calls whose first
+# tool_calls[0].function.name matches are approved immediately without invoking
+# SPARC. Use for tools that are not in the tool spec but are legitimate (e.g.
+# Exgentic's internal `message` tool) to prevent false-positive rejects in
+# block mode.
+# Example: SPARC_SKIP_TOOLS=message,transfer_to_human_agents
+_SKIP_TOOLS: frozenset[str] = frozenset(
+    t.strip() for t in os.getenv("SPARC_SKIP_TOOLS", "").split(",") if t.strip()
+)
+
 
 def _strip_tool_arg_keys(tool_calls: list[dict], keys: frozenset[str]) -> list[dict]:
     """Return a copy of tool_calls with the named argument keys removed."""
@@ -93,6 +103,12 @@ def create_app(engine: ReflectionEngine | None = None) -> FastAPI:
             )
             if _LOG_REQUESTS:
                 log.info("after strip (%s): tool_calls=%s", sorted(_STRIP_KEYS), request.tool_calls)
+
+        if _SKIP_TOOLS and request.tool_calls:
+            tool_name = request.tool_calls[0].get("function", {}).get("name", "")
+            if tool_name in _SKIP_TOOLS:
+                log.info("reflect tool=%s decision=approve score=- ms=0.0 (skipped — in SPARC_SKIP_TOOLS)", tool_name)
+                return ReflectResponse(decision="approve", issues=[], overall_avg_score=None, execution_time_ms=0.0)
 
         # SPARCReflectionComponent.process is synchronous (and CPU/IO bound on the
         # LLM call); run it off the event loop so the service stays responsive.
