@@ -76,6 +76,9 @@ def create_app(engine: ReflectionEngine | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.settings = settings
 
+    if _SKIP_TOOLS:
+        log.info("SPARC_SKIP_TOOLS: the following tools will be auto-approved without evaluation: %s", sorted(_SKIP_TOOLS))
+
     @app.get("/healthz")
     def healthz() -> dict[str, object]:
         return {
@@ -107,9 +110,7 @@ def create_app(engine: ReflectionEngine | None = None) -> FastAPI:
         if _SKIP_TOOLS and request.tool_calls:
             tool_name = request.tool_calls[0].get("function", {}).get("name", "")
             if tool_name in _SKIP_TOOLS:
-                from datetime import datetime, timezone
-                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                log.info("reflect ts=%s tool=%s args={} decision=approve score=- ms=- (skipped — SPARC_SKIP_TOOLS)", ts, tool_name)
+                log.debug("reflect tool=%s skipped (SPARC_SKIP_TOOLS)", tool_name)
                 return ReflectResponse(decision="approve", issues=[], overall_avg_score=None, execution_time_ms=None)
 
         # SPARCReflectionComponent.process is synchronous (and CPU/IO bound on the
