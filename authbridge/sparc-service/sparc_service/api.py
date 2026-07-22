@@ -4,6 +4,11 @@ Endpoints:
   POST /reflect  — run SPARC on a proposed tool call, return the verdict.
   GET  /healthz  — liveness (always ok if the process is up).
   GET  /readyz   — readiness (config valid and component buildable).
+
+Log levels:
+  INFO  — clean operational log: startup skip list + evaluated verdicts only.
+  DEBUG — adds per-call skip entries and full request payloads
+          (payloads only when SPARC_LOG_REQUESTS=true).
 """
 
 from __future__ import annotations
@@ -21,26 +26,22 @@ from .settings import Settings
 
 log = logging.getLogger(__name__)
 
-# When SPARC_LOG_REQUESTS=true, log the full incoming ReflectRequest JSON so
-# you can inspect exactly what the caller sends (useful for diagnosing
-# unexpected tool argument keys). Disabled by default — payloads can be large.
-_LOG_REQUESTS = os.getenv("SPARC_LOG_REQUESTS", "").strip().lower() in {"1", "true", "yes"}
+# SPARC_LOG_REQUESTS=true — log the full incoming ReflectRequest JSON at DEBUG.
+# Useful for diagnosing unexpected tool argument keys. Disabled by default —
+# payloads can be large. Requires LOG_LEVEL=DEBUG to be visible.
+_LOG_REQUESTS: bool = os.getenv("SPARC_LOG_REQUESTS", "").strip().lower() in {"1", "true", "yes"}
 
-# When SPARC_STRIP_TOOL_ARG_KEYS is set (comma-separated key names), those keys
-# are removed from every tool_calls[].function.arguments JSON object before the
-# request reaches SPARC. Use to drop agent-injected keys that are not in the
-# tool spec and would cause SPARC to reject the call.
+# SPARC_STRIP_TOOL_ARG_KEYS — comma-separated keys to remove from every
+# tool_calls[].function.arguments before SPARC evaluates the call.
 # Example: SPARC_STRIP_TOOL_ARG_KEYS=session_id,request_id
 _STRIP_KEYS: frozenset[str] = frozenset(
     k.strip() for k in os.getenv("SPARC_STRIP_TOOL_ARG_KEYS", "").split(",") if k.strip()
 )
 
-# When SPARC_SKIP_TOOLS is set (comma-separated tool names), calls whose first
-# tool_calls[0].function.name matches are approved immediately without invoking
-# SPARC. Use for tools that are not in the tool spec but are legitimate (e.g.
-# Exgentic's internal `message` tool) to prevent false-positive rejects in
-# block mode.
-# Example: SPARC_SKIP_TOOLS=message,transfer_to_human_agents
+# SPARC_SKIP_TOOLS — comma-separated tool names to auto-approve without SPARC.
+# Use for infrastructure tools (e.g. message, calculate) that have no policy
+# risk and would cause false-positive rejects.
+# Example: SPARC_SKIP_TOOLS=message,calculate
 _SKIP_TOOLS: frozenset[str] = frozenset(
     t.strip() for t in os.getenv("SPARC_SKIP_TOOLS", "").split(",") if t.strip()
 )
@@ -76,6 +77,7 @@ def create_app(engine: ReflectionEngine | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.settings = settings
 
+    # INFO: announce skip list once at startup so operators know what is bypassed
     if _SKIP_TOOLS:
         log.info("SPARC_SKIP_TOOLS: the following tools will be auto-approved without evaluation: %s", sorted(_SKIP_TOOLS))
 
@@ -97,19 +99,21 @@ def create_app(engine: ReflectionEngine | None = None) -> FastAPI:
 
     @app.post("/reflect", response_model=ReflectResponse)
     async def reflect(request: ReflectRequest) -> ReflectResponse:
+        # DEBUG: full request payload — only when SPARC_LOG_REQUESTS=true
         if _LOG_REQUESTS:
-            log.info("incoming reflect request: %s", request.model_dump_json())
+            log.debug("incoming reflect request: %s", request.model_dump_json())
 
         if _STRIP_KEYS and request.tool_calls:
             request = request.model_copy(
                 update={"tool_calls": _strip_tool_arg_keys(request.tool_calls, _STRIP_KEYS)}
             )
             if _LOG_REQUESTS:
-                log.info("after strip (%s): tool_calls=%s", sorted(_STRIP_KEYS), request.tool_calls)
+                log.debug("after strip (%s): tool_calls=%s", sorted(_STRIP_KEYS), request.tool_calls)
 
         if _SKIP_TOOLS and request.tool_calls:
             tool_name = request.tool_calls[0].get("function", {}).get("name", "")
             if tool_name in _SKIP_TOOLS:
+                # DEBUG: per-call skip entry — visible only at DEBUG level
                 log.debug("reflect tool=%s skipped (SPARC_SKIP_TOOLS)", tool_name)
                 return ReflectResponse(decision="approve", issues=[], overall_avg_score=None, execution_time_ms=None)
 
