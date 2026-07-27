@@ -80,7 +80,7 @@ def build_llm_client(settings: Settings):
     # client needs comes from SPARC_LLM_KWARGS_JSON.
     native = not settings.llm_registry_id
 
-    if native and settings.provider == "watsonx":
+    if native and settings.provider in ["watsonx", "litellm.watsonx"]:
         client = client_cls(
             model_name=settings.model,
             api_key=settings.wx_api_key,
