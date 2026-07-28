@@ -7,10 +7,13 @@ network access or LLM credentials.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
 from .settings import Settings
+
+_debug_log = logging.getLogger("sparc_service.llm_debug")
 
 # Map the configurable track names to altk Track enum members. Resolved lazily.
 _TRACK_NAMES = {
@@ -30,13 +33,15 @@ def resolve_track(name: str):
 
 
 def _patch_watsonx_for_reasoning_models(client_cls):
-    """Patch WatsonX client to inject schema via system prompt instead of response_format.
+    """Patch LLM client to inject schema via system prompt instead of response_format.
 
-    gpt-oss-120b is a reasoning model that returns output in reasoning_content, not
-    content. ALTK's _parse_llm_response only reads content, so response_format mode
-    always raises 'No content or tool calls found in response'. Injecting the schema
-    into the system prompt (same as ALTK's Ollama provider) makes the model return
-    valid JSON in content. See: https://github.com/kagenti/kagenti-extensions/issues/676
+    Some models don't support response_format structured output (WatsonX reasoning
+    models return output in reasoning_content not content; Haiku-4-5 via IBM LiteLLM
+    proxy also lacks response_format support). ALTK's _parse_llm_response only reads
+    content, so response_format mode always raises 'No content or tool calls found in
+    response'. Injecting the schema into the system prompt (same as ALTK's Ollama
+    provider) makes the model return valid JSON in content.
+    See: https://github.com/kagenti/kagenti-extensions/issues/676
     """
     import functools
 
@@ -63,6 +68,49 @@ def _patch_watsonx_for_reasoning_models(client_cls):
     client_cls.generate_async = patched_generate_async
 
 
+def _patch_debug_logging(client_cls):
+    """Wrap generate_async to log the exact prompt and raw response.
+
+    Activated only when SPARC_DEBUG_LLM=true. Logs at DEBUG level so normal
+    runs are unaffected. Each log line is prefixed [LLM_DEBUG] for easy grep:
+
+        kubectl logs -n kagenti-system deploy/sparc-service | grep LLM_DEBUG
+    """
+    import functools
+    import json as _json
+
+    original_generate_async = client_cls.generate_async
+
+    @functools.wraps(original_generate_async)
+    async def patched_generate_async(self, prompt, *args, **kwargs):
+        schema = kwargs.get("schema")
+        schema_field = kwargs.get("schema_field", "response_format")
+        retries = kwargs.get("retries", "?")
+
+        # Truncate prompt for readability — first 800 chars is enough to see the metric name
+        prompt_preview = _json.dumps(prompt, ensure_ascii=False)[:800] if isinstance(prompt, list) else str(prompt)[:800]
+        schema_preview = _json.dumps(schema, ensure_ascii=False)[:400] if isinstance(schema, dict) else str(type(schema))
+
+        _debug_log.debug(
+            "[LLM_DEBUG] >>> generate_async called\n"
+            "  schema_field=%s  retries=%s\n"
+            "  schema(truncated)=%s\n"
+            "  prompt(truncated)=%s",
+            schema_field, retries, schema_preview, prompt_preview,
+        )
+
+        try:
+            result = await original_generate_async(self, prompt, *args, **kwargs)
+            result_preview = _json.dumps(result, ensure_ascii=False)[:400] if isinstance(result, dict) else str(result)[:400]
+            _debug_log.debug("[LLM_DEBUG] <<< generate_async SUCCESS result=%s", result_preview)
+            return result
+        except Exception as exc:
+            _debug_log.debug("[LLM_DEBUG] <<< generate_async ERROR %s: %s", type(exc).__name__, exc)
+            raise
+
+    client_cls.generate_async = patched_generate_async
+
+
 def build_llm_client(settings: Settings):
     """Construct a validating ALTK LLM client for the configured provider.
 
@@ -84,6 +132,8 @@ def build_llm_client(settings: Settings):
     # client needs comes from SPARC_LLM_KWARGS_JSON.
     native = not settings.llm_registry_id
 
+    debug = os.getenv("SPARC_DEBUG_LLM", "").strip().lower() in ("1", "true", "yes")
+
     if native and settings.provider in ["watsonx", "litellm.watsonx"]:
         client = client_cls(
             model_name=settings.model,
@@ -93,6 +143,8 @@ def build_llm_client(settings: Settings):
             timeout=settings.llm_timeout_seconds,
         )
         _patch_watsonx_for_reasoning_models(client_cls)
+        if debug:
+            _patch_debug_logging(client_cls)
         return client
 
     if native and settings.provider == "ollama":
@@ -103,11 +155,14 @@ def build_llm_client(settings: Settings):
         # localhost:11434). The env vars are set too as a belt-and-suspenders.
         os.environ["OLLAMA_API_BASE"] = settings.ollama_base_url
         os.environ["OLLAMA_BASE_URL"] = settings.ollama_base_url
-        return client_cls(
+        client = client_cls(
             model_name=settings.model,
             api_key=settings.ollama_api_key,
             api_url=settings.ollama_base_url,
         )
+        if debug:
+            _patch_debug_logging(client_cls)
+        return client
 
     # Generic path (openai / azure / litellm, or any provider when
     # SPARC_LLM_REGISTRY_ID is set). LiteLLM routes by the model string and reads
@@ -120,7 +175,10 @@ def build_llm_client(settings: Settings):
     lite_kwargs.setdefault("timeout", settings.llm_timeout_seconds)
     if settings.provider == "openai" and settings.openai_base_url and "api_base" not in lite_kwargs:
         lite_kwargs["api_base"] = settings.openai_base_url
-    return client_cls(model_name=settings.model, **lite_kwargs)
+    client = client_cls(model_name=settings.model, **lite_kwargs)
+    if debug:
+        _patch_debug_logging(client_cls)
+    return client
 
 
 def build_component(settings: Settings):
