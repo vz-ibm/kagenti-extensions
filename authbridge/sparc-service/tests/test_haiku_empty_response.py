@@ -27,8 +27,6 @@ import os
 import asyncio
 from pathlib import Path
 
-import pytest
-
 # Load credentials from /root/.env if present
 _env_file = Path("/root/.env")
 if _env_file.exists():
@@ -140,7 +138,6 @@ def _call_with_system_prompt() -> dict | None:
     }
 
 
-@pytest.mark.skipif(not API_KEY or not API_BASE, reason="OAIKEY/OAIBASE not set")
 def test_response_format_intermittent_empty(n_calls: int = 10):
     """Send the same call N times with response_format and count empty responses.
 
@@ -168,7 +165,6 @@ def test_response_format_intermittent_empty(n_calls: int = 10):
     )
 
 
-@pytest.mark.skipif(not API_KEY or not API_BASE, reason="OAIKEY/OAIBASE not set")
 def test_system_prompt_mode_no_empty(n_calls: int = 10):
     """Same N calls but with schema in system prompt instead of response_format.
 
