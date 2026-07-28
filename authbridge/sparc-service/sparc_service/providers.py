@@ -87,16 +87,15 @@ def _patch_debug_logging(client_cls):
         schema_field = kwargs.get("schema_field", "response_format")
         retries = kwargs.get("retries", "?")
 
-        # Truncate prompt for readability — first 800 chars is enough to see the metric name
-        prompt_preview = _json.dumps(prompt, ensure_ascii=False)[:800] if isinstance(prompt, list) else str(prompt)[:800]
-        schema_preview = _json.dumps(schema, ensure_ascii=False)[:400] if isinstance(schema, dict) else str(type(schema))
+        prompt_full = _json.dumps(prompt, ensure_ascii=False) if isinstance(prompt, list) else str(prompt)
+        schema_full = _json.dumps(schema, ensure_ascii=False) if isinstance(schema, dict) else str(type(schema))
 
         _debug_log.debug(
             "[LLM_DEBUG] >>> generate_async called\n"
             "  schema_field=%s  retries=%s\n"
-            "  schema(truncated)=%s\n"
-            "  prompt(truncated)=%s",
-            schema_field, retries, schema_preview, prompt_preview,
+            "  schema=%s\n"
+            "  prompt=%s",
+            schema_field, retries, schema_full, prompt_full,
         )
 
         try:
@@ -176,6 +175,13 @@ def build_llm_client(settings: Settings):
     if settings.provider == "openai" and settings.openai_base_url and "api_base" not in lite_kwargs:
         lite_kwargs["api_base"] = settings.openai_base_url
     client = client_cls(model_name=settings.model, **lite_kwargs)
+    # IBM LiteLLM proxy (and other non-native providers) have the same empty-content
+    # issue as WatsonX reasoning models: ALTK passes schema_field="response_format"
+    # explicitly, but the proxy returns an empty content field when response_format
+    # is active, causing "No content or tool calls found in response". Apply the same
+    # system-prompt injection patch so the model returns JSON in content.
+    if settings.provider == "litellm":
+        _patch_watsonx_for_reasoning_models(client_cls)
     if debug:
         _patch_debug_logging(client_cls)
     return client
