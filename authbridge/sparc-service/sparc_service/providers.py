@@ -45,14 +45,18 @@ def _patch_watsonx_for_reasoning_models(client_cls):
 
     @functools.wraps(original_generate)
     def patched_generate(self, *args, **kwargs):
-        kwargs.setdefault("schema_field", None)
-        kwargs.setdefault("include_schema_in_system_prompt", True)
+        # Force-override (not setdefault) — ALTK passes schema_field="response_format"
+        # explicitly, so setdefault would be a no-op and the reasoning model would
+        # return output in reasoning_content instead of content, causing
+        # "No content or tool calls found in response". See ISSUE-676.
+        kwargs["schema_field"] = None
+        kwargs["include_schema_in_system_prompt"] = True
         return original_generate(self, *args, **kwargs)
 
     @functools.wraps(original_generate_async)
     async def patched_generate_async(self, *args, **kwargs):
-        kwargs.setdefault("schema_field", None)
-        kwargs.setdefault("include_schema_in_system_prompt", True)
+        kwargs["schema_field"] = None
+        kwargs["include_schema_in_system_prompt"] = True
         return await original_generate_async(self, *args, **kwargs)
 
     client_cls.generate = patched_generate
