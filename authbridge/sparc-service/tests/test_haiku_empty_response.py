@@ -154,23 +154,38 @@ PROMPT = [
 ]
 
 
+def _schema_to_pydantic(schema: dict):
+    """Reproduce ALTK's json_schema_to_pydantic_model conversion."""
+    from pydantic import BaseModel, Field, create_model
+    from typing import Optional, Any
+
+    type_mapping = {"string": str, "integer": int, "number": float, "boolean": bool, "array": list, "object": dict}
+    fields = {}
+    required_fields = set(schema.get("required", []))
+    for prop_name, prop_schema in schema.get("properties", {}).items():
+        field_type = type_mapping.get(prop_schema.get("type"), Any)
+        default = ... if prop_name in required_fields else None
+        desc = prop_schema.get("description")
+        fields[prop_name] = (field_type, Field(default, description=desc) if desc else (field_type, default))
+    return create_model(schema.get("title", "AutoModel"), **fields)
+
+
 def _call_with_response_format() -> dict | None:
-    """Single synchronous call using response_format — exactly what ALTK does."""
+    """Single synchronous call reproducing ALTK's exact path:
+    schema dict -> pydantic model -> response_format kwarg -> litellm.acompletion
+    This is what ValidatingLLMClient.generate_async does when schema_field='response_format'.
+    """
     import litellm
+
+    # ALTK converts schema dict to Pydantic model and passes as response_format
+    pydantic_schema = _schema_to_pydantic(HALLUCINATION_SCHEMA)
 
     response = litellm.completion(
         model=MODEL,
         messages=PROMPT,
         api_key=API_KEY,
         api_base=API_BASE,
-        response_format={
-            "type": "json_schema",
-            "json_schema": {
-                "name": "general_hallucination_check",
-                "schema": HALLUCINATION_SCHEMA,
-                "strict": True,
-            },
-        },
+        response_format=pydantic_schema,   # Pydantic model, NOT a json_schema dict
         timeout=30,
     )
     msg = response.choices[0].message
