@@ -68,6 +68,50 @@ def _patch_watsonx_for_reasoning_models(client_cls):
     client_cls.generate_async = patched_generate_async
 
 
+def _patch_empty_response_retry(client_cls, max_retries: int = 3):
+    """Wrap generate_async to retry on 'No content or tool calls found in response'.
+
+    ALTK's ValidatingLLMClient.generate_async retry loop catches only
+    OutputValidationError. When the IBM LiteLLM proxy returns empty content,
+    _parse_llm_response raises ValueError (not OutputValidationError), so all 3
+    configured retries are bypassed and the metric fails immediately.
+
+    This wrapper catches that ValueError and retries up to max_retries times with
+    a short back-off before re-raising, giving the proxy a chance to succeed on a
+    subsequent attempt.
+
+    See ISSUE-019 in docs/open-issues.md and upstream ALTK tracker.
+    """
+    import asyncio
+    import functools
+
+    original_generate_async = client_cls.generate_async
+
+    @functools.wraps(original_generate_async)
+    async def patched_generate_async(self, *args, **kwargs):
+        last_exc = None
+        for attempt in range(1, max_retries + 2):  # max_retries extra attempts
+            try:
+                return await original_generate_async(self, *args, **kwargs)
+            except ValueError as exc:
+                if "No content or tool calls found in response" not in str(exc):
+                    raise
+                last_exc = exc
+                if attempt <= max_retries:
+                    _debug_log.debug(
+                        "[LLM_DEBUG] empty-response retry %d/%d after ValueError: %s",
+                        attempt, max_retries, exc,
+                    )
+                    await asyncio.sleep(0.5 * attempt)
+                else:
+                    _debug_log.debug(
+                        "[LLM_DEBUG] empty-response retry exhausted (%d attempts)", max_retries + 1
+                    )
+        raise last_exc  # type: ignore[misc]
+
+    client_cls.generate_async = patched_generate_async
+
+
 def _patch_debug_logging(client_cls):
     """Wrap generate_async to log the exact prompt and raw response.
 
@@ -142,6 +186,7 @@ def build_llm_client(settings: Settings):
             timeout=settings.llm_timeout_seconds,
         )
         _patch_watsonx_for_reasoning_models(client_cls)
+        _patch_empty_response_retry(client_cls, max_retries=settings.retries)
         if debug:
             _patch_debug_logging(client_cls)
         return client
@@ -182,6 +227,7 @@ def build_llm_client(settings: Settings):
     # system-prompt injection patch so the model returns JSON in content.
     if settings.provider == "litellm":
         _patch_watsonx_for_reasoning_models(client_cls)
+        _patch_empty_response_retry(client_cls, max_retries=settings.retries)
     if debug:
         _patch_debug_logging(client_cls)
     return client
