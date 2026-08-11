@@ -38,6 +38,15 @@ def build_llm_client(settings: Settings):
     client (``litellm.output_val``), where the model string selects the provider
     and any extra client kwargs come from ``SPARC_LLM_KWARGS_JSON``. SPARC
     requires a *validating* client, so every branch returns one.
+
+    Every branch also enables ALTK's ``prompt_based_validation``, which injects
+    the expected schema into the system prompt instead of sending a native
+    ``response_format``. ALTK's own SPARC metric schemas constrain integers with
+    ``minimum``/``maximum``, which several structured-output APIs reject outright
+    (Bedrock: "For 'integer' type, properties maximum, minimum are not
+    supported"), and reasoning models tend to ignore the native kwarg anyway.
+    Must be applied post-construction: the LiteLLM clients splat unknown
+    constructor kwargs straight into the provider call.
     """
     from altk.core.llm import get_llm
 
@@ -57,7 +66,7 @@ def build_llm_client(settings: Settings):
             project_id=settings.wx_project_id,
             api_base=settings.wx_url,
             timeout=settings.llm_timeout_seconds,
-        )
+        ).configure_validation(prompt_based_validation=True)
 
     if native and settings.provider == "ollama":
         # Point every LiteLLM Ollama call at the configured server. We pass
@@ -71,7 +80,7 @@ def build_llm_client(settings: Settings):
             model_name=settings.model,
             api_key=settings.ollama_api_key,
             api_url=settings.ollama_base_url,
-        )
+        ).configure_validation(prompt_based_validation=True)
 
     # Generic path (openai / azure / litellm, or any provider when
     # SPARC_LLM_REGISTRY_ID is set). LiteLLM routes by the model string and reads
@@ -84,7 +93,9 @@ def build_llm_client(settings: Settings):
     lite_kwargs.setdefault("timeout", settings.llm_timeout_seconds)
     if settings.provider == "openai" and settings.openai_base_url and "api_base" not in lite_kwargs:
         lite_kwargs["api_base"] = settings.openai_base_url
-    return client_cls(model_name=settings.model, **lite_kwargs)
+    return client_cls(model_name=settings.model, **lite_kwargs).configure_validation(
+        prompt_based_validation=True
+    )
 
 
 def build_component(settings: Settings):
